@@ -45,20 +45,24 @@ NeuroSploit is a CLI tool built for bug bounty hunters and red teamers. It uses 
 - 🧪 Streamlined recon flow built for real-world bug bounty testing
 - 🔒 Offline, no OpenAI API key needed (uses Ollama & local models)
 - ⚡️ Fast CLI interface with loading effects and ASCII banners
+- 🧱 Attack Surface Engine with backend fingerprinting, JS endpoint extraction, sensitive parameter scoring, classification, and AI risk ranking
 
 ---
 
 ## 📸 Preview
 
 > Startup banner:
-(venv) [harishragav💀kamalinux] neurosploit$ neurosploit
-    _   __                     _____       __      _ __ 
+(venv) [harishragavkamalinux] neurosploit$ neurosploit
+>
+> 
+    _   __                     _____       __      _ __
    / | / /__  __  ___________ / ___/____  / /___  (_) /_
   /  |/ / _ \/ / / / ___/ __ \\__ \/ __ \/ / __ \/ / __/
  / /|  /  __/ /_/ / /  / /_/ /__/ / /_/ / / /_/ / / /_  
 /_/ |_/\___/\__,_/_/   \____/____/ .___/_/\____/_/\__/  
-                                /_/                     
+                                /_/                 
 
+                                
 By Kamalesh  |  AI Recon Assistant
 ============================================================
 
@@ -86,14 +90,17 @@ Install and run a model:
 
 ```bash
 ollama serve
-ollama run phi #optional
+ollama run phi
+/*ollama run mistral
+ollama run gemma        # choose alternate model if prefer higher accuracy 
+ollama llama3.2*/
 ```
 🧪 Usage
 ```bash
 python cli.py
 ```
 ### 5.build pkg and run
-from root dir(\neurospoit)
+from root dir(..\neurospoit)
 ```
 pip install .
 neurosploit 

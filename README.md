@@ -14,6 +14,7 @@ NeuroSploit is a CLI tool built for bug bounty hunters and red teamers. It uses 
 - 🧪 Streamlined recon flow built for real-world bug bounty testing
 - 🔒 Offline, no OpenAI API key needed (uses Ollama & local models)
 - ⚡️ Fast CLI interface with loading effects and ASCII banners
+- 🧱 Attack Surface Engine with backend fingerprinting, JS endpoint extraction, sensitive parameter scoring, classification, and AI risk ranking
 
 ---
 

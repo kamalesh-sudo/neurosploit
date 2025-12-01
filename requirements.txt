@@ -5,3 +5,5 @@ pyfiglet
 whois
 urllib3
 setuptools
+beautifulsoup4
+mmh3

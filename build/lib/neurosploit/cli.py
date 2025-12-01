@@ -14,6 +14,7 @@ import subprocess
 import requests
 import time
 import socket
+from .attacksurface_engine import AttackSurfaceEngine
 
 def is_ollama_running(host='localhost', port=11434):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -52,6 +53,13 @@ def print_banner():
     print(colored("By Harish Ragav  |  AI-Powered Reconnaissance Tool", 'yellow'))
     print(colored("Version 2.0 - Enhanced with Real Subdomain Enumeration", 'green'))
     print(colored("=" * 70, 'cyan'))
+
+def select_execution_mode():
+    print("\n" + colored("🧠 SELECT ENGINE:", 'cyan', attrs=['bold']))
+    print("1. Classic Reconnaissance")
+    print("2. Attack Surface Engine (triage mode)")
+    choice = input(colored("\n> Choose engine (1-2): ", 'yellow')).strip()
+    return 'attack_surface' if choice == '2' else 'recon'
 
 def get_targets():
     """Get target domains from user input"""
@@ -343,49 +351,11 @@ def main():
         else:
             print("✅ Ollama already running.")
         
-        # Get targets
-        targets = get_targets()
-        if not targets:
-            print(colored("❌ No targets specified. Exiting.", 'red'))
-            return
-        
-        # Select scan configuration
-        scan_config = select_scan_mode()
-        
-        # Run reconnaissance on all targets
-        all_results = []
-        all_prompts = []
-        
-        total_targets = len(targets)
-        for i, domain in enumerate(targets, 1):
-            print(colored(f"\n📊 Progress: {progress_bar(i-1, total_targets)}", 'cyan'))
-            
-            recon_data = run_reconnaissance(domain, scan_config)
-            if recon_data:
-                all_results.append(recon_data)
-                
-                # Display detailed results if single domain
-                if len(targets) == 1:
-                    display_detailed_results(recon_data)
-                
-                # Generate AI prompt
-                ai_prompt = build_ai_prompt(domain, recon_data)
-                all_prompts.append(ai_prompt)
-        
-        print(colored(f"\n📊 Progress: {progress_bar(total_targets, total_targets)}", 'cyan'))
-        
-        if not all_prompts:
-            print(colored("❌ No successful reconnaissance results. Exiting.", 'red'))
-            return
-        
-        # Ask for AI analysis
-        if all_prompts:
-            ai_choice = input(colored("\n🤖 Run AI analysis? (y/n, default: y): ", 'green')).strip().lower()
-            if ai_choice != 'n':
-                model = input(colored("Choose AI model [phi/mistral/gemma/llama3.2] (default: phi): ", 'green')).strip() or "phi"
-                get_ai_analysis(all_prompts, model)
-        
-        print(colored("\n✅ NeuroSploit reconnaissance completed!", 'green', attrs=['bold']))
+        mode = select_execution_mode()
+        if mode == 'attack_surface':
+            run_attack_surface_mode()
+        else:
+            run_recon_mode()
         
     except KeyboardInterrupt:
         print(colored("\n\n👋 Goodbye! Stay safe in the digital realm.", 'yellow'))
@@ -393,6 +363,85 @@ def main():
     except Exception as e:
         print(colored(f"\n❌ Unexpected error: {e}", 'red'))
         sys.exit(1)
+
+def run_recon_mode():
+    targets = get_targets()
+    if not targets:
+        print(colored("❌ No targets specified. Exiting.", 'red'))
+        return
+    
+    scan_config = select_scan_mode()
+    
+    all_results = []
+    all_prompts = []
+    
+    total_targets = len(targets)
+    for i, domain in enumerate(targets, 1):
+        print(colored(f"\n📊 Progress: {progress_bar(i-1, total_targets)}", 'cyan'))
+        
+        recon_data = run_reconnaissance(domain, scan_config)
+        if recon_data:
+            all_results.append(recon_data)
+            
+            if len(targets) == 1:
+                display_detailed_results(recon_data)
+            
+            ai_prompt = build_ai_prompt(domain, recon_data)
+            all_prompts.append(ai_prompt)
+    
+    print(colored(f"\n📊 Progress: {progress_bar(total_targets, total_targets)}", 'cyan'))
+    
+    if not all_prompts:
+        print(colored("❌ No successful reconnaissance results. Exiting.", 'red'))
+        return
+    
+    ai_choice = input(colored("\n🤖 Run AI analysis? (y/n, default: y): ", 'green')).strip().lower()
+    if ai_choice != 'n':
+        model = input(colored("Choose AI model [phi/mistral/gemma/llama3.2] (default: phi): ", 'green')).strip() or "phi"
+        get_ai_analysis(all_prompts, model)
+    
+    print(colored("\n✅ NeuroSploit reconnaissance completed!", 'green', attrs=['bold']))
+
+
+
+def run_attack_surface_mode():
+    target = input(colored("\nEnter target URL or domain: ", 'green')).strip()
+    if not target:
+        print(colored("❌ No target provided.", 'red'))
+        return
+    print(colored("\n🚀 Running Attack Surface Engine...", 'cyan'))
+    try:
+        engine = AttackSurfaceEngine(target)
+        result = engine.run_full_analysis()
+        display_attack_surface_results(result)
+    except Exception as exc:
+        print(colored(f"❌ Attack surface analysis failed: {exc}", 'red'))
+
+
+def display_attack_surface_results(result):
+    print(colored("\n🧱 BACKEND FINGERPRINT:", 'yellow', attrs=['bold']))
+    backend = result.backend_fingerprint
+    print(f"Backend: {backend.get('backend', 'Unknown')} (confidence {backend.get('confidence')})")
+    print(f"Signals: {', '.join(backend.get('detected_from', [])) or 'None'}")
+
+    print(colored("\n🔍 ENDPOINTS DISCOVERED:", 'yellow', attrs=['bold']))
+    for endpoint in result.endpoint_extraction['endpoints'][:10]:
+        print(f" - {endpoint}")
+    print(f"Total filtered: {result.endpoint_extraction['metadata']['filtered']}")
+
+    print(colored("\n🔐 SENSITIVE PARAMETERS:", 'yellow', attrs=['bold']))
+    for param in result.parameter_discovery['sensitive_params'][:5]:
+        print(f" - {param['param']} (score {param['score']})")
+
+    print(colored("\n🎯 ATTACK SURFACE SUMMARY:", 'yellow', attrs=['bold']))
+    for category, count in result.attack_surface['summary']['counts'].items():
+        print(f" - {category}: {count}")
+
+    print(colored("\n🔥 TOP RISKY ENDPOINTS:", 'red', attrs=['bold']))
+    for item in result.risk_scores[:5]:
+        reasons = ', '.join(item['high_risk_reason']) or 'heuristics'
+        print(f" - {item['endpoint']} -> {item['risk_score']} ({reasons})")
+
 
 if __name__ == "__main__":
     main()
