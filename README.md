@@ -21,16 +21,14 @@ NeuroSploit is a CLI tool built for bug bounty hunters and red teamers. It uses 
 
 > Startup banner:
 (venv) [harishragavkamalinux] neurosploit$ neurosploit
->
-> 
+```
     _   __                     _____       __      _ __
    / | / /__  __  ___________ / ___/____  / /___  (_) /_
   /  |/ / _ \/ / / / ___/ __ \\__ \/ __ \/ / __ \/ / __/
  / /|  /  __/ /_/ / /  / /_/ /__/ / /_/ / / /_/ / / /_  
 /_/ |_/\___/\__,_/_/   \____/____/ .___/_/\____/_/\__/  
-                                /_/                 
-
-                                
+                                /_/
+  ```
 By Kamalesh  |  AI Recon Assistant
 ============================================================
 
