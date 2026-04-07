@@ -1,457 +1,581 @@
-import requests
-import socket
-import threading
-import time
-import dns.resolver
-import subprocess
+import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+import re
+import socket
 import ssl
-import whois
-from datetime import datetime
-import urllib3
-import sys
+import subprocess
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-# Disable SSL warnings for reconnaissance purposes
+import dns.resolver
+import requests
+import urllib3
+
+# Disable SSL warnings for reconnaissance purposes.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-class NeuroRecon:
-    def __init__(self, domain, threads=50, timeout=5):
-        self.domain = domain
-        self.threads = threads
-        self.timeout = timeout
-        self.found_subdomains = set()
-        self.live_subdomains = []
-        self.tech_stack = {}
-        self.vulnerabilities = []
-        
-        # Configure requests session for better SSL handling
-        self.session = requests.Session()
-        self.session.verify = False  # For recon purposes
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
 
-    def load_subdomain_wordlist(self):
-        """Load common subdomain wordlist"""
-        common_subdomains = [
-            "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "webdisk",
-            "ns2", "cpanel", "whm", "autodiscover", "autoconfig", "m", "imap", "test",
-            "ns", "blog", "pop3", "dev", "www2", "admin", "forum", "news", "vpn",
-            "ns3", "mail2", "new", "mysql", "old", "www1", "email", "img", "www3",
-            "help", "shop", "secure", "download", "demo", "api", "app", "stage",
-            "staging", "beta", "dev", "development", "prod", "production", "test",
-            "testing", "lab", "sandbox", "portal", "dashboard", "panel", "login"
-        ]
-        
-        # Try to load from file if exists
-        try:
-            with open('data/subdomains.txt', 'r') as f:
-                file_subdomains = [line.strip() for line in f.readlines()]
-            return list(set(common_subdomains + file_subdomains))
-        except FileNotFoundError:
-            return common_subdomains
+LogCallback = Callable[[str], Optional[Awaitable[None]]]
+ProgressCallback = Callable[[str, int, int, str], Optional[Awaitable[None]]]
 
-    def dns_bruteforce(self, subdomain):
-        """Bruteforce subdomain using DNS resolution"""
+
+@dataclass
+class ScanConfig:
+    mode: str = "full"
+    max_concurrency: int = 40
+    timeout: int = 5
+    enable_ct_logs: bool = True
+    enable_dns_bruteforce: bool = True
+    enable_http_probe: bool = True
+    enable_deep_analysis: bool = True
+    enable_nmap: bool = False
+    nmap_top_ports: int = 100
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ReconState:
+    found_subdomains: Set[Tuple[str, str]] = field(default_factory=set)
+    live_subdomains: List[Dict[str, Any]] = field(default_factory=list)
+
+
+class AsyncNeuroRecon:
+    """Async-first reconnaissance engine with progress hooks for TUI integration."""
+
+    COMMON_PORTS = [80, 443, 21, 22, 25, 53, 110, 143, 993, 995]
+
+    DEFAULT_SUBDOMAIN_WORDLIST = [
+        "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "webdisk",
+        "ns2", "cpanel", "whm", "autodiscover", "autoconfig", "m", "imap", "test", "ns",
+        "blog", "pop3", "dev", "www2", "admin", "forum", "news", "vpn", "ns3", "mail2",
+        "new", "mysql", "old", "www1", "email", "img", "www3", "help", "shop", "secure",
+        "download", "demo", "api", "app", "stage", "staging", "beta", "development", "prod",
+        "production", "testing", "lab", "sandbox", "portal", "dashboard", "panel", "login",
+    ]
+
+    def __init__(
+        self,
+        domain: str,
+        config: Optional[ScanConfig] = None,
+        log_callback: Optional[LogCallback] = None,
+        progress_callback: Optional[ProgressCallback] = None,
+    ):
+        self.domain = domain.strip().lower()
+        self.config = config or ScanConfig()
+        self.log_callback = log_callback
+        self.progress_callback = progress_callback
+        self.state = ReconState()
+
+    async def _emit_log(self, message: str) -> None:
+        if not self.log_callback:
+            return
+        maybe_awaitable = self.log_callback(message)
+        if maybe_awaitable:
+            await maybe_awaitable
+
+    async def _emit_progress(self, phase: str, current: int, total: int, message: str) -> None:
+        if not self.progress_callback:
+            return
+        maybe_awaitable = self.progress_callback(phase, current, total, message)
+        if maybe_awaitable:
+            await maybe_awaitable
+
+    def load_subdomain_wordlist(self) -> List[str]:
+        packaged_path = Path(__file__).resolve().parent / "data" / "subdomains.txt"
+        file_words: List[str] = []
+        if packaged_path.exists():
+            file_words = [line.strip() for line in packaged_path.read_text().splitlines() if line.strip()]
+        deduped = {word.lower() for word in self.DEFAULT_SUBDOMAIN_WORDLIST + file_words}
+        return sorted(deduped)
+
+    def _dns_bruteforce_blocking(self, subdomain: str) -> Optional[Tuple[str, str]]:
+        full_domain = f"{subdomain}.{self.domain}"
         try:
-            full_domain = f"{subdomain}.{self.domain}"
             resolver = dns.resolver.Resolver()
-            resolver.timeout = self.timeout
-            resolver.lifetime = self.timeout
-            
-            answers = resolver.resolve(full_domain, 'A')
+            resolver.timeout = self.config.timeout
+            resolver.lifetime = self.config.timeout
+            answers = resolver.resolve(full_domain, "A")
             ip = str(answers[0])
-            self.found_subdomains.add((full_domain, ip))
             return full_domain, ip
-        except:
-            return None, None
+        except Exception:
+            return None
 
-    def crt_sh_enum(self):
-        """Certificate Transparency logs enumeration"""
+    async def dns_bruteforce(self, subdomain: str) -> Optional[Tuple[str, str]]:
+        return await asyncio.to_thread(self._dns_bruteforce_blocking, subdomain)
+
+    def _crt_sh_enum_blocking(self) -> Set[Tuple[str, str]]:
+        discovered: Set[Tuple[str, str]] = set()
+        url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (NeuroSploit Async Recon)",
+            "Accept": "application/json",
+        }
+        response = requests.get(url, headers=headers, timeout=20, verify=False)
+        if response.status_code != 200:
+            return discovered
+
         try:
-            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                certificates = response.json()
-                for cert in certificates:
-                    name = cert.get('name_value', '')
-                    if name and not name.startswith('*'):
-                        subdomains = name.split('\n')
-                        for sub in subdomains:
-                            if sub.endswith(f".{self.domain}"):
-                                self.found_subdomains.add((sub.strip(), "Unknown"))
-        except Exception as e:
-            print(f"[!] Error in crt.sh enumeration: {e}")
+            certificates = response.json()
+        except ValueError:
+            return discovered
 
-    def check_subdomain_alive(self, subdomain_info):
-        """Check if subdomain is alive and get additional info"""
-        subdomain, ip = subdomain_info
+        for cert in certificates:
+            name_value = cert.get("name_value", "")
+            if not name_value:
+                continue
+            for entry in name_value.splitlines():
+                clean = entry.strip().lower().lstrip("*.")
+                if clean.endswith(f".{self.domain}") and "*" not in clean:
+                    discovered.add((clean, "Unknown"))
+        return discovered
+
+    async def crt_sh_enum(self) -> Set[Tuple[str, str]]:
         try:
-            # HTTP Check
-            for protocol in ['https', 'http']:
-                try:
-                    url = f"{protocol}://{subdomain}"
-                    response = self.session.get(
-                        url, 
-                        timeout=self.timeout, 
-                        allow_redirects=True
-                    )
-                    
-                    tech_info = self.detect_technology(response)
-                    
-                    subdomain_data = {
-                        'subdomain': subdomain,
-                        'ip': ip,
-                        'status_code': response.status_code,
-                        'protocol': protocol,
-                        'title': self.extract_title(response.text),
-                        'server': response.headers.get('Server', 'Unknown'),
-                        'technology': tech_info,
-                        'response_time': response.elapsed.total_seconds(),
-                        'content_length': len(response.content)
-                    }
-                    
-                    self.live_subdomains.append(subdomain_data)
-                    return subdomain_data
-                except:
-                    continue
-        except Exception as e:
-            pass
-        return None
+            return await asyncio.to_thread(self._crt_sh_enum_blocking)
+        except Exception as exc:
+            await self._emit_log(f"[crt.sh] lookup failed: {exc}")
+            return set()
 
-    def detect_technology(self, response):
-        """Detect technologies used by the subdomain"""
-        tech = []
-        headers = response.headers
-        content = response.text.lower()
-        
-        # Server detection
-        server = headers.get('Server', '').lower()
-        if 'nginx' in server:
-            tech.append('Nginx')
-        elif 'apache' in server:
-            tech.append('Apache')
-        elif 'iis' in server:
-            tech.append('IIS')
-        
-        # Framework detection
-        if 'x-powered-by' in headers:
-            tech.append(f"Powered by: {headers['x-powered-by']}")
-        
-        # Content-based detection
-        if 'react' in content or 'react-dom' in content:
-            tech.append('React')
-        if 'angular' in content:
-            tech.append('Angular')
-        if 'vue' in content:
-            tech.append('Vue.js')
-        if 'wordpress' in content or 'wp-content' in content:
-            tech.append('WordPress')
-        if 'drupal' in content:
-            tech.append('Drupal')
-        if 'joomla' in content:
-            tech.append('Joomla')
-        
-        # Security headers check
-        security_headers = ['x-frame-options', 'x-xss-protection', 'x-content-type-options']
-        missing_headers = [h for h in security_headers if h not in headers]
-        if missing_headers:
-            tech.append(f"Missing security headers: {', '.join(missing_headers)}")
-        
+    def _extract_title(self, html: str) -> str:
+        match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return "No Title"
+        return " ".join(match.group(1).split())[:160]
+
+    def _detect_technology(self, headers: Dict[str, str], body_text: str) -> List[str]:
+        tech: List[str] = []
+        server = headers.get("Server", "").lower()
+        content = body_text.lower()
+
+        if "nginx" in server:
+            tech.append("Nginx")
+        elif "apache" in server:
+            tech.append("Apache")
+        elif "iis" in server:
+            tech.append("IIS")
+
+        powered_by = headers.get("X-Powered-By")
+        if powered_by:
+            tech.append(f"Powered by: {powered_by}")
+
+        if "react" in content or "react-dom" in content:
+            tech.append("React")
+        if "angular" in content:
+            tech.append("Angular")
+        if "vue" in content:
+            tech.append("Vue.js")
+        if "wordpress" in content or "wp-content" in content:
+            tech.append("WordPress")
+        if "drupal" in content:
+            tech.append("Drupal")
+        if "joomla" in content:
+            tech.append("Joomla")
+
+        security_headers = ["X-Frame-Options", "X-Content-Type-Options", "Content-Security-Policy"]
+        missing = [header for header in security_headers if header not in headers]
+        if missing:
+            tech.append(f"Missing security headers: {', '.join(missing)}")
+
         return tech
 
-    def extract_title(self, html):
-        """Extract title from HTML content"""
-        try:
-            import re
-            title_match = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
-            return title_match.group(1).strip() if title_match else "No Title"
-        except:
-            return "No Title"
+    def _probe_subdomain_blocking(self, subdomain: str, ip: str) -> Optional[Dict[str, Any]]:
+        session = requests.Session()
+        session.verify = False
+        session.headers.update({"User-Agent": "Mozilla/5.0 (NeuroSploit Async Probe)"})
 
-    def port_scan(self, ip, ports=[80, 443, 21, 22, 25, 53, 110, 993, 995]):
-        """Basic port scan on discovered IPs - Fixed to prevent terminal issues"""
-        open_ports = []
-        for port in ports:
+        for protocol in ("https", "http"):
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2)
-                result = sock.connect_ex((ip, port))
-                if result == 0:
-                    open_ports.append(port)
-                sock.close()
+                response = session.get(
+                    f"{protocol}://{subdomain}",
+                    timeout=self.config.timeout,
+                    allow_redirects=True,
+                )
+                headers = dict(response.headers)
+                tech_info = self._detect_technology(headers, response.text)
+                return {
+                    "subdomain": subdomain,
+                    "ip": ip,
+                    "status_code": response.status_code,
+                    "protocol": protocol,
+                    "title": self._extract_title(response.text),
+                    "server": headers.get("Server", "Unknown"),
+                    "technology": tech_info,
+                    "response_time": response.elapsed.total_seconds(),
+                    "content_length": len(response.content),
+                }
             except Exception:
-                # Silently handle errors to prevent terminal issues
+                continue
+        return None
+
+    async def check_subdomain_alive(self, subdomain_info: Tuple[str, str]) -> Optional[Dict[str, Any]]:
+        subdomain, ip = subdomain_info
+        return await asyncio.to_thread(self._probe_subdomain_blocking, subdomain, ip)
+
+    def _port_scan_blocking(self, ip: str, ports: Sequence[int]) -> List[int]:
+        open_ports: List[int] = []
+        for port in ports:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(1.5)
+                if sock.connect_ex((ip, port)) == 0:
+                    open_ports.append(port)
+            except Exception:
                 pass
+            finally:
+                sock.close()
         return open_ports
 
-    def check_ssl_cert(self, domain):
-        """Check SSL certificate information - Fixed to prevent terminal issues"""
+    def _check_ssl_cert_blocking(self, domain: str) -> Optional[Dict[str, Any]]:
         try:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            
             with socket.create_connection((domain, 443), timeout=5) as sock:
-                with context.wrap_socket(sock, server_hostname=domain) as ssock:
-                    cert = ssock.getpeercert()
+                with context.wrap_socket(sock, server_hostname=domain) as secure_sock:
+                    cert = secure_sock.getpeercert()
+                    if not cert:
+                        return None
                     return {
-                        'subject': cert.get('subject'),
-                        'issuer': cert.get('issuer'), 
-                        'version': cert.get('version'),
-                        'serialNumber': cert.get('serialNumber'),
-                        'notBefore': cert.get('notBefore'),
-                        'notAfter': cert.get('notAfter')
+                        "issuer": cert.get("issuer"),
+                        "subject": cert.get("subject"),
+                        "serialNumber": cert.get("serialNumber"),
+                        "notBefore": cert.get("notBefore"),
+                        "notAfter": cert.get("notAfter"),
                     }
         except Exception:
-            # Silently handle SSL errors to prevent terminal issues
             return None
 
-    def safe_print(self, message):
-        """Safe print function to prevent terminal control character issues"""
+    def _run_nmap_blocking(self, ip: str) -> Optional[Dict[str, Any]]:
         try:
-            # Clean the message of any control characters
-            clean_message = ''.join(char for char in message if ord(char) >= 32 or char in '\n\t')
-            print(clean_message)
-            sys.stdout.flush()
-        except Exception:
-            print("[!] Output error occurred")
+            process = subprocess.run(
+                ["nmap", "-Pn", f"--top-ports={self.config.nmap_top_ports}", ip],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {"error": "nmap not installed"}
+        except Exception as exc:
+            return {"error": str(exc)}
 
-    def run_full_recon(self):
-        """Execute complete reconnaissance with improved terminal handling"""
-        self.safe_print(f"🎯 Starting reconnaissance on: {self.domain}")
-        self.safe_print("=" * 60)
-        
-        # Step 1: Certificate Transparency
-        self.safe_print("📋 [1/4] Enumerating subdomains via Certificate Transparency...")
-        self.crt_sh_enum()
-        
-        # Step 2: DNS Bruteforce
-        self.safe_print("🔍 [2/4] DNS Bruteforce enumeration...")
-        wordlist = self.load_subdomain_wordlist()
-        
-        with ThreadPoolExecutor(max_workers=self.threads) as executor:
-            futures = [executor.submit(self.dns_bruteforce, sub) for sub in wordlist]
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result[0]:  # If subdomain found
-                        pass  # Already added in dns_bruteforce method
-                except Exception:
-                    continue
-        
-        self.safe_print(f"✅ Found {len(self.found_subdomains)} subdomains")
-        
-        # Step 3: Check alive subdomains
-        self.safe_print("🌐 [3/4] Checking live subdomains...")
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(self.check_subdomain_alive, sub_info) 
-                      for sub_info in self.found_subdomains]
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result:
-                        self.safe_print(f"   ✓ {result['subdomain']} [{result['status_code']}] - {result['server']}")
-                except Exception:
-                    continue
-        
-        # Step 4: Additional analysis - Fixed to prevent terminal issues
-        self.safe_print("🔬 [4/4] Performing additional analysis...")
-        
-        # Process each subdomain safely
-        for i, subdomain_data in enumerate(self.live_subdomains):
-            try:
-                ip = subdomain_data.get('ip', 'Unknown')
-                if ip != "Unknown":
-                    # Port scan with error handling
-                    try:
-                        open_ports = self.port_scan(ip)
-                        subdomain_data['open_ports'] = open_ports
-                    except Exception:
-                        subdomain_data['open_ports'] = []
-                    
-                    # SSL certificate check with error handling
-                    if subdomain_data.get('protocol') == 'https':
-                        try:
-                            ssl_info = self.check_ssl_cert(subdomain_data['subdomain'])
-                            subdomain_data['ssl_cert'] = ssl_info
-                        except Exception:
-                            subdomain_data['ssl_cert'] = None
-                
-                # Progress indicator without control characters
-                if (i + 1) % 5 == 0:
-                    self.safe_print(f"   Analyzed {i + 1}/{len(self.live_subdomains)} subdomains...")
-                    
-            except Exception as e:
-                # Skip problematic subdomains
-                continue
-        
-        self.safe_print("✅ Additional analysis completed")
-        return self.generate_report()
+        output = process.stdout or ""
+        open_ports = []
+        for line in output.splitlines():
+            match = re.search(r"(\d+)/tcp\s+open\s+([\w\-]+)", line)
+            if match:
+                open_ports.append({"port": int(match.group(1)), "service": match.group(2)})
 
-    def generate_report(self):
-        """Generate comprehensive reconnaissance report"""
-        report = {
-            'domain': self.domain,
-            'timestamp': datetime.now().isoformat(),
-            'total_subdomains_found': len(self.found_subdomains),
-            'live_subdomains_count': len(self.live_subdomains),
-            'subdomains': list(self.found_subdomains),
-            'live_subdomains': self.live_subdomains,
-            'summary': {
-                'technologies': self.get_technology_summary(),
-                'security_issues': self.identify_security_issues(),
-                'recommendations': self.generate_recommendations()
-            }
+        return {
+            "exit_code": process.returncode,
+            "open_ports": open_ports,
+            "snippet": "\n".join(output.splitlines()[:18]),
         }
-        return report
 
-    def get_technology_summary(self):
-        """Summarize technologies found across all subdomains"""
-        tech_count = {}
-        for subdomain in self.live_subdomains:
-            for tech in subdomain.get('technology', []):
-                tech_count[tech] = tech_count.get(tech, 0) + 1
-        return tech_count
+    async def _bounded_run(
+        self,
+        phase: str,
+        items: Iterable[Any],
+        worker: Callable[[Any], Awaitable[Any]],
+        concurrency: int,
+        progress_prefix: str,
+    ) -> List[Any]:
+        item_list = list(items)
+        total = len(item_list)
+        if not item_list:
+            await self._emit_progress(phase, 0, 0, f"{progress_prefix}: no items")
+            return []
 
-    def identify_security_issues(self):
-        """Identify potential security issues"""
-        issues = []
-        
-        for subdomain in self.live_subdomains:
-            sub_issues = []
-            
-            # Check for missing security headers
-            tech = subdomain.get('technology', [])
-            for t in tech:
-                if 'Missing security headers' in t:
-                    sub_issues.append("Missing security headers")
-            
-            # Check for HTTP instead of HTTPS
-            if subdomain.get('protocol') == 'http':
-                sub_issues.append("Using HTTP instead of HTTPS")
-            
-            # Check for common admin panels
-            title = subdomain.get('title', '').lower()
-            if any(word in title for word in ['admin', 'login', 'dashboard', 'panel']):
-                sub_issues.append("Potential admin interface exposed")
-            
-            # Check for development/staging environments
-            subdomain_name = subdomain.get('subdomain', '').lower()
-            if any(word in subdomain_name for word in ['dev', 'test', 'staging', 'beta']):
-                sub_issues.append("Development/staging environment exposed")
-            
-            if sub_issues:
-                issues.append({
-                    'subdomain': subdomain.get('subdomain'),
-                    'issues': sub_issues
-                })
-        
+        semaphore = asyncio.Semaphore(max(concurrency, 1))
+
+        async def run_one(item: Any) -> Any:
+            async with semaphore:
+                return await worker(item)
+
+        tasks = [asyncio.create_task(run_one(item)) for item in item_list]
+        results: List[Any] = []
+
+        for current, task in enumerate(asyncio.as_completed(tasks), start=1):
+            result = await task
+            results.append(result)
+            await self._emit_progress(phase, current, total, f"{progress_prefix}: {current}/{total}")
+
+        return results
+
+    async def _enrich_live_subdomain(self, subdomain_data: Dict[str, Any]) -> Dict[str, Any]:
+        enriched = dict(subdomain_data)
+        ip = enriched.get("ip")
+
+        if ip and ip != "Unknown":
+            ports = await asyncio.to_thread(self._port_scan_blocking, ip, self.COMMON_PORTS)
+            enriched["open_ports"] = ports
+
+            if self.config.enable_nmap:
+                enriched["nmap"] = await asyncio.to_thread(self._run_nmap_blocking, ip)
+
+        if enriched.get("protocol") == "https":
+            enriched["ssl_cert"] = await asyncio.to_thread(self._check_ssl_cert_blocking, enriched["subdomain"])
+
+        return enriched
+
+    def get_technology_summary(self, live_subdomains: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+        summary: Dict[str, int] = {}
+        for subdomain in live_subdomains:
+            for tech in subdomain.get("technology", []):
+                summary[tech] = summary.get(tech, 0) + 1
+        return summary
+
+    def identify_security_issues(self, live_subdomains: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        issues: List[Dict[str, Any]] = []
+        for subdomain in live_subdomains:
+            flags: List[str] = []
+
+            technology = subdomain.get("technology", [])
+            if any("Missing security headers" in item for item in technology):
+                flags.append("Missing security headers")
+
+            if subdomain.get("protocol") == "http":
+                flags.append("Using HTTP instead of HTTPS")
+
+            title = str(subdomain.get("title", "")).lower()
+            if any(word in title for word in ["admin", "login", "dashboard", "panel"]):
+                flags.append("Potential admin interface exposed")
+
+            host = str(subdomain.get("subdomain", "")).lower()
+            if any(word in host for word in ["dev", "test", "staging", "beta"]):
+                flags.append("Development or staging environment exposed")
+
+            if flags:
+                issues.append({"subdomain": subdomain.get("subdomain"), "issues": flags})
+
         return issues
 
-    def generate_recommendations(self):
-        """Generate security recommendations"""
-        recommendations = [
-            "Implement proper security headers (X-Frame-Options, X-XSS-Protection, etc.)",
-            "Ensure all subdomains use HTTPS with valid certificates",
-            "Remove or restrict access to development/staging environments",
-            "Implement proper access controls for admin interfaces",
-            "Regular security scanning and penetration testing",
-            "Monitor certificate transparency logs for unauthorized certificates"
+    def generate_recommendations(self) -> List[str]:
+        return [
+            "Enable strict security headers (CSP, X-Frame-Options, X-Content-Type-Options)",
+            "Force HTTPS and redirect plain HTTP endpoints",
+            "Hide or restrict non-production environments",
+            "Harden and gate admin interfaces with MFA and allowlists",
+            "Continuously monitor CT logs for rogue certificates",
+            "Schedule recurring external attack-surface scans",
         ]
-        return recommendations
 
-def build_ai_prompt(domain, recon_data):
-    """Build enhanced AI prompt with real reconnaissance data"""
-    
-    live_subs = recon_data.get('live_subdomains', [])
-    security_issues = recon_data.get('summary', {}).get('security_issues', [])
-    tech_summary = recon_data.get('summary', {}).get('technologies', {})
-    
-    subdomains_info = []
-    for sub in live_subs[:10]:  # Limit to first 10 for prompt
-        info = f"  - {sub['subdomain']} [{sub['status_code']}] - {sub['server']}"
-        if sub.get('open_ports'):
-            info += f" (Ports: {', '.join(map(str, sub['open_ports']))})"
-        subdomains_info.append(info)
-    
-    issues_text = []
-    for issue in security_issues[:5]:  # Limit to first 5
-        issues_text.append(f"  - {issue['subdomain']}: {', '.join(issue['issues'])}")
-    
-    tech_text = []
-    for tech, count in tech_summary.items():
-        tech_text.append(f"  - {tech}: {count} instances")
-    
-    prompt = f"""
-🎯 **NEUROSPLOIT RECONNAISSANCE REPORT**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    async def run_full_recon(self) -> Dict[str, Any]:
+        if not self.domain:
+            raise ValueError("Domain cannot be empty")
 
-📌 **Target Domain:** {domain}
-📊 **Total Subdomains Found:** {recon_data.get('total_subdomains_found', 0)}
-🌐 **Live Subdomains:** {recon_data.get('live_subdomains_count', 0)}
+        started = datetime.now(timezone.utc)
+        await self._emit_log(f"Starting reconnaissance for {self.domain}")
 
-🔍 **LIVE SUBDOMAINS:**
-{chr(10).join(subdomains_info) if subdomains_info else "  No live subdomains found"}
+        if self.config.mode == "mock":
+            await self._emit_progress("mock", 1, 1, "Generated mock recon data")
+            report = run_mock_recon(self.domain)
+            await self._emit_log(f"Mock scan complete for {self.domain}")
+            return report
 
-🧱 **TECHNOLOGY STACK:**
-{chr(10).join(tech_text) if tech_text else "  No technologies detected"}
+        if self.config.enable_ct_logs:
+            await self._emit_log("Step 1/4: Enumerating Certificate Transparency logs")
+            ct_subdomains = await self.crt_sh_enum()
+            self.state.found_subdomains.update(ct_subdomains)
+            await self._emit_progress(
+                "ct_logs",
+                len(ct_subdomains),
+                len(ct_subdomains),
+                f"CT enumeration discovered {len(ct_subdomains)} entries",
+            )
 
-⚠️  **SECURITY ISSUES IDENTIFIED:**
-{chr(10).join(issues_text) if issues_text else "  No obvious security issues detected"}
+        if self.config.enable_dns_bruteforce:
+            await self._emit_log("Step 2/4: Running DNS brute-force")
+            wordlist = self.load_subdomain_wordlist()
+            dns_results = await self._bounded_run(
+                phase="dns_bruteforce",
+                items=wordlist,
+                worker=self.dns_bruteforce,
+                concurrency=self.config.max_concurrency,
+                progress_prefix="DNS brute-force",
+            )
+            self.state.found_subdomains.update(item for item in dns_results if item)
 
-🎯 **AI ANALYSIS REQUEST:**
-Based on the above reconnaissance data, please provide:
+        await self._emit_log(f"Discovered {len(self.state.found_subdomains)} candidate subdomains")
 
-1. **Vulnerability Assessment:** Identify potential vulnerabilities in the discovered infrastructure
-2. **Attack Vectors:** Suggest possible attack paths and entry points
-3. **Prioritized Targets:** Rank subdomains by their potential value as attack targets
-4. **Exploitation Strategies:** Recommend specific tools and techniques for further testing
-5. **Risk Assessment:** Evaluate the overall security posture and risk level
+        if self.config.enable_http_probe:
+            await self._emit_log("Step 3/4: Probing discovered hosts for live HTTP services")
+            probe_results = await self._bounded_run(
+                phase="http_probe",
+                items=sorted(self.state.found_subdomains),
+                worker=self.check_subdomain_alive,
+                concurrency=max(8, min(30, self.config.max_concurrency)),
+                progress_prefix="HTTP probe",
+            )
+            self.state.live_subdomains = [item for item in probe_results if item]
+        else:
+            self.state.live_subdomains = []
 
-Please focus on actionable intelligence that could be used for authorized penetration testing.
-"""
-    
-    return prompt
+        await self._emit_log(f"Detected {len(self.state.live_subdomains)} live hosts")
 
-# Example usage function
-def run_enhanced_recon(domain):
-    """Main function to run enhanced reconnaissance"""
-    recon = NeuroRecon(domain, threads=50)
-    return recon.run_full_recon()
+        if self.config.enable_deep_analysis and self.state.live_subdomains:
+            await self._emit_log("Step 4/4: Running port, SSL, and optional nmap analysis")
+            enriched = await self._bounded_run(
+                phase="deep_analysis",
+                items=self.state.live_subdomains,
+                worker=self._enrich_live_subdomain,
+                concurrency=max(4, min(12, self.config.max_concurrency)),
+                progress_prefix="Deep analysis",
+            )
+            self.state.live_subdomains = [item for item in enriched if item]
 
-# Quick test function for development
-def run_mock_recon(domain):
-    """Mock function for testing - replace with run_enhanced_recon for real results"""
+        report = {
+            "domain": self.domain,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "started_at": started.isoformat(),
+            "duration_seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 2),
+            "scan_config": self.config.to_dict(),
+            "total_subdomains_found": len(self.state.found_subdomains),
+            "live_subdomains_count": len(self.state.live_subdomains),
+            "subdomains": sorted(list(self.state.found_subdomains), key=lambda x: x[0]),
+            "live_subdomains": self.state.live_subdomains,
+            "summary": {
+                "technologies": self.get_technology_summary(self.state.live_subdomains),
+                "security_issues": self.identify_security_issues(self.state.live_subdomains),
+                "recommendations": self.generate_recommendations(),
+            },
+        }
+
+        await self._emit_progress("complete", 1, 1, f"Completed scan for {self.domain}")
+        await self._emit_log(f"Reconnaissance complete for {self.domain}")
+        return report
+
+
+async def run_enhanced_recon_async(
+    domain: str,
+    config: Optional[ScanConfig] = None,
+    log_callback: Optional[LogCallback] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Dict[str, Any]:
+    recon = AsyncNeuroRecon(
+        domain=domain,
+        config=config,
+        log_callback=log_callback,
+        progress_callback=progress_callback,
+    )
+    return await recon.run_full_recon()
+
+
+def run_enhanced_recon(domain: str) -> Dict[str, Any]:
+    """Backward-compatible sync wrapper around the async recon engine."""
+    return asyncio.run(run_enhanced_recon_async(domain))
+
+
+def run_mock_recon(domain: str) -> Dict[str, Any]:
     return {
         "domain": domain,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_subdomains_found": 15,
         "live_subdomains_count": 8,
         "subdomains": [
-            (f"www.{domain}", "192.168.1.1"),
-            (f"api.{domain}", "192.168.1.2"),
-            (f"admin.{domain}", "192.168.1.3")
+            (f"www.{domain}", "192.168.1.10"),
+            (f"api.{domain}", "192.168.1.11"),
+            (f"admin.{domain}", "192.168.1.12"),
+            (f"staging.{domain}", "192.168.1.13"),
         ],
         "live_subdomains": [
             {
                 "subdomain": f"www.{domain}",
-                "ip": "192.168.1.1",
+                "ip": "192.168.1.10",
                 "status_code": 200,
                 "protocol": "https",
-                "server": "nginx/1.18.0",
+                "title": "Example App",
+                "server": "nginx/1.24",
                 "technology": ["Nginx", "React"],
-                "open_ports": [80, 443]
-            }
+                "open_ports": [80, 443],
+            },
+            {
+                "subdomain": f"admin.{domain}",
+                "ip": "192.168.1.12",
+                "status_code": 302,
+                "protocol": "http",
+                "title": "Admin Login",
+                "server": "Apache/2.4",
+                "technology": ["Apache", "Missing security headers: Content-Security-Policy"],
+                "open_ports": [80, 22],
+            },
         ],
         "summary": {
-            "technologies": {"Nginx": 3, "React": 2, "Missing security headers": 2},
+            "technologies": {
+                "Nginx": 3,
+                "React": 2,
+                "Apache": 1,
+                "Missing security headers: Content-Security-Policy": 1,
+            },
             "security_issues": [
                 {
                     "subdomain": f"admin.{domain}",
-                    "issues": ["Potential admin interface exposed", "Missing security headers"]
+                    "issues": ["Potential admin interface exposed", "Using HTTP instead of HTTPS"],
                 }
-            ]
-        }
+            ],
+            "recommendations": [
+                "Force HTTPS and apply HSTS",
+                "Add CSP and security headers",
+                "Restrict admin access by source IP and MFA",
+            ],
+        },
     }
+
+
+def build_ai_prompt(domain: str, recon_data: Dict[str, Any]) -> str:
+    live_subs = recon_data.get("live_subdomains", [])
+    security_issues = recon_data.get("summary", {}).get("security_issues", [])
+    tech_summary = recon_data.get("summary", {}).get("technologies", {})
+
+    subdomains_info = []
+    for sub in live_subs[:10]:
+        entry = f"  - {sub.get('subdomain', 'unknown')} [{sub.get('status_code', 'n/a')}]"
+        if sub.get("server"):
+            entry += f" - {sub['server']}"
+        if sub.get("open_ports"):
+            entry += f" (Ports: {', '.join(map(str, sub['open_ports']))})"
+        subdomains_info.append(entry)
+
+    issues_text = [
+        f"  - {issue.get('subdomain', 'unknown')}: {', '.join(issue.get('issues', []))}"
+        for issue in security_issues[:5]
+    ]
+
+    tech_text = [f"  - {tech}: {count} instances" for tech, count in tech_summary.items()]
+
+    prompt = f"""
+NEUROSPLOIT RECONNAISSANCE REPORT
+=================================
+
+Target Domain: {domain}
+Total Subdomains Found: {recon_data.get('total_subdomains_found', 0)}
+Live Subdomains: {recon_data.get('live_subdomains_count', 0)}
+
+LIVE SUBDOMAINS:
+{chr(10).join(subdomains_info) if subdomains_info else '  No live subdomains found'}
+
+TECHNOLOGY STACK:
+{chr(10).join(tech_text) if tech_text else '  No technologies detected'}
+
+SECURITY ISSUES IDENTIFIED:
+{chr(10).join(issues_text) if issues_text else '  No obvious security issues detected'}
+
+AI ANALYSIS REQUEST:
+1. Identify likely vulnerabilities in this external attack surface
+2. Suggest possible attack paths and entry points
+3. Prioritize targets by likely impact and exploitability
+4. Recommend practical next-step validation strategies
+5. Provide a concise risk summary
+""".strip()
+
+    return prompt
+
+
+def export_report(report: Dict[str, Any], output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2, default=str))
+    return output_path

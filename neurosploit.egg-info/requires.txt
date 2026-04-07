@@ -1,7 +1,0 @@
-pyfiglet
-termcolor
-requests
-dnspython
-python-whois
-urllib3
-certifi

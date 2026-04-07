@@ -1,123 +1,70 @@
-# 🧠 NeuroSploit
+# NeuroSploit
 
-> **AI-Powered Red Team Assistant for Recon & Attack Surface Analysis**
+Interactive recon framework with an async Textual TUI.
 
-NeuroSploit is a CLI tool built for bug bounty hunters and red teamers. It uses local Large Language Models (LLMs) like **Mistral**, **Phi**, or any model supported by **Ollama** to analyze recon data and suggest possible vulnerabilities, attack vectors, and misconfigurations — offline and securely.
+## What Changed in v3
 
----
+- Multi-pane TUI layout (sidebar, live logs, tasks, results table, status footer)
+- Async recon engine using `asyncio`
+- Background scan execution through Textual worker API (`run_worker`)
+- Live progress bar and active-task table
+- Rich-powered summary rendering and JSON syntax-highlighted logs
+- Command bar + modal input for targets and scan config
+- Keyboard-driven navigation and quick actions
 
-## 🚀 Features
+## Installation
 
-- 🕵️ Recon data input (single domain or list)
-- 🤖 LLM-based vulnerability analysis
-- 🧠 Suggests IDOR, XSS, SSTI, backup leaks, misconfig, etc.
-- 🧪 Streamlined recon flow built for real-world bug bounty testing
-- 🔒 Offline, no OpenAI API key needed (uses Ollama & local models)
-- ⚡️ Fast CLI interface with loading effects and ASCII banners
-
----
-
-## 📸 Preview
-
-> Startup banner:
-(venv) [harishragavkamalinux] neurosploit$ neurosploit
->
-> 
-    _   __                     _____       __      _ __
-   / | / /__  __  ___________ / ___/____  / /___  (_) /_
-  /  |/ / _ \/ / / / ___/ __ \\__ \/ __ \/ / __ \/ / __/
- / /|  /  __/ /_/ / /  / /_/ /__/ / /_/ / / /_/ / / /_  
-/_/ |_/\___/\__,_/_/   \____/____/ .___/_/\____/_/\__/  
-                                /_/                 
-
-                                
-By Kamalesh  |  AI Recon Assistant
-============================================================
-
----
-
-## ⚙️ Installation
-
-### 1. Clone the Repository 
-``` bash
+```bash
 git clone https://github.com/iharishragav/neurosploit.git
 cd neurosploit
-```
-### 2. Create a Virtual Environment(to avaoid package collapse)
-```bash
-python -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install Requirements
-```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-### 4. Run Ollama with Local LLM
-Install and run a model:
-
-```bash
-ollama serve
-ollama run phi
-/*ollama run mistral
-ollama run gemma        # choose alternate model if prefer higher accuracy 
-ollama llama3.2*/
-```
-🧪 Usage
-```bash
-python cli.py
-```
-### 5.build pkg and run
-from root dir(..\neurospoit)
-```
 pip install .
-neurosploit 
-
 ```
 
-Then follow the prompt:
+## Run TUI
 
-(1) Single domain or (2) List of domains?
-It reads:
+```bash
+neurosploit
+```
 
-data/urls.txt → recon inputs
+## Default Hotkeys
 
-prompts/analysis_prompt.txt → AI instruction
+- `a` add target
+- `r` run scan for selected target
+- `c` open scan configuration modal
+- `v` toggle logs/results view
+- `s` sort results table
+- `l` clear log pane
+- `e` export selected target report
+- `/` focus command bar
+- `q` quit
 
-And sends the combined prompt to your local LLM API at http://localhost:11434.
+## Command Bar
 
-📦 Directory Structure:
------------- -----------  
+Use `:help` in the command bar for built-in commands.
 
-neurosploit/
-├── cli.py
-├── __init__.py
-├── core.py
-├── prompts/
-│   └── analysis_prompt.txt
-├── data/
-│   └── urls.txt
-├── requirements.txt
-└── README.md
+Examples:
 
-🧠 Sample Prompt (LLM):
---------- -------------
-You're a professional red team assistant. Based on the input recon data, provide possible vulnerabilities, misconfigurations, or attack strategies.
+```text
+:add example.com
+:scan
+:scan api.example.com
+:mode mock
+:threads 80
+:timeout 8
+:nmap on
+:export example.com
+```
 
-Analyze the input for security issues and suggest realistic attack techniques such as:
-- IDOR
-- SSTI
-- XSS
-- Misconfigurations
-- Directory traversal
-- Backup file exposure
+## Headless Mode
 
-Respond only with practical, legal advice for bug bounty hunters.
+```bash
+neurosploit --headless example.com --threads 60 --timeout 7 --output results/example.json
+```
 
-📌 Credits:
-------------
-Built by Kamalesh (iharishragav)
+## Notes
 
-Inspired by real-world bug bounty recon paths
-
-Powered by Ollama and open-source LLMs
+- `nmap` enrichment is optional and requires `nmap` installed on the host.
+- Local LLM analysis hooks can still be built on top using `build_ai_prompt` in `neurosploit/core.py`.

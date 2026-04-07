@@ -1,0 +1,118 @@
+Screen {
+    background: #081217;
+    color: #d8f3dc;
+}
+
+#body {
+    layout: horizontal;
+    height: 1fr;
+}
+
+#sidebar {
+    width: 36;
+    min-width: 32;
+    padding: 1;
+    border: tall #2f9e44;
+    background: #0f1a1c;
+}
+
+.panel-title {
+    color: #8ce99a;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#target-list {
+    height: 1fr;
+    border: round #2b8a3e;
+    margin-bottom: 1;
+}
+
+#tool-box {
+    height: 12;
+    border: round #f59f00;
+    padding: 0 1;
+}
+
+#sidebar-controls {
+    height: auto;
+    margin-top: 1;
+}
+
+#sidebar-controls Button {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#main {
+    width: 1fr;
+    padding: 1;
+}
+
+#view-label {
+    color: #74c0fc;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#view-stack {
+    height: 1fr;
+    border: round #4dabf7;
+    background: #0d1418;
+}
+
+#log-view,
+#results-view {
+    height: 1fr;
+}
+
+#task-view {
+    height: 11;
+    border: round #fcc419;
+    margin-top: 1;
+}
+
+#scan-progress {
+    height: 3;
+    margin-top: 1;
+}
+
+#command-input {
+    margin-top: 1;
+}
+
+#status-bar {
+    height: 1;
+    color: #ffd43b;
+    margin-top: 1;
+}
+
+ModalScreen {
+    align: center middle;
+    background: #000000 50%;
+}
+
+.target-modal,
+.config-modal {
+    width: 70;
+    height: auto;
+    border: thick #74c0fc;
+    background: #111b20;
+    padding: 1 2;
+}
+
+.modal-title {
+    color: #a5d8ff;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.modal-actions {
+    layout: horizontal;
+    margin-top: 1;
+}
+
+.modal-actions Button {
+    width: 1fr;
+    margin-right: 1;
+}

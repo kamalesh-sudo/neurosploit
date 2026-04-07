@@ -1,2 +1,0 @@
-[console_scripts]
-neurosploit = neurosploit.cli:main
