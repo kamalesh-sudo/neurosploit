@@ -3,6 +3,8 @@ import asyncio
 import json
 from pathlib import Path
 
+from .targets import is_valid_domain, normalize_domain
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NeuroSploit interactive recon framework")
@@ -48,10 +50,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_headless(args: argparse.Namespace) -> int:
-    from .core import ScanConfig, export_report, run_enhanced_recon_async
-
-    if not args.target:
+    target = normalize_domain(args.target or "")
+    if not target:
         print("error: target domain is required in headless mode")
+        return 2
+    if not is_valid_domain(target):
+        print(f"error: invalid target domain: {args.target!r}")
+        return 2
+
+    try:
+        from .core import ScanConfig, export_report, run_enhanced_recon_async
+    except ModuleNotFoundError as exc:
+        print(
+            "error: missing runtime dependency for headless scan. "
+            "Install requirements with: pip install -r requirements.txt\n"
+            f"details: {exc}"
+        )
         return 2
 
     config = ScanConfig(
@@ -61,7 +75,7 @@ def _run_headless(args: argparse.Namespace) -> int:
         enable_nmap=args.nmap,
     )
 
-    report = asyncio.run(run_enhanced_recon_async(domain=args.target, config=config))
+    report = asyncio.run(run_enhanced_recon_async(domain=target, config=config))
 
     if args.output:
         output_path = export_report(report, args.output)
@@ -75,6 +89,10 @@ def _run_headless(args: argparse.Namespace) -> int:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.target and not args.headless:
+        parser.error("target argument is only supported with --headless")
+        return
 
     if args.headless:
         raise SystemExit(_run_headless(args))

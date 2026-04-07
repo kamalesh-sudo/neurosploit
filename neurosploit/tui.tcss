@@ -1,110 +1,428 @@
 Screen {
-    background: #081217;
-    color: #d8f3dc;
+    background: #090b1b;
+    color: #e9ecff;
 }
 
-#body {
-    layout: horizontal;
+#app-shell {
     height: 1fr;
+    width: 1fr;
+    padding: 1 1;
+    layout: vertical;
+    border: round #2b2f57;
+    background: #0b0e21;
 }
 
-#sidebar {
-    width: 36;
-    min-width: 32;
-    padding: 1;
-    border: tall #2f9e44;
-    background: #0f1a1c;
+#dashboard {
+    layout: grid;
+    grid-size: 12 12;
+    grid-gutter: 1 1;
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+.layout-wide #dashboard {
+    grid-size: 12 12;
+    grid-gutter: 1 1;
+}
+
+.layout-ultra #dashboard {
+    grid-size: 12 12;
+    grid-gutter: 1 1;
+}
+
+.layout-compact #dashboard {
+    grid-size: 12 12;
+    grid-gutter: 0 1;
+}
+
+.card {
+    border: round #3b4488;
+    background: #121735;
+    padding: 1 1;
+    color: #e9ecff;
+    tint: #0f1224 6%;
+}
+
+.panel {
+    padding: 1 1;
 }
 
 .panel-title {
-    color: #8ce99a;
+    color: #9de6ff;
     text-style: bold;
+    margin-bottom: 1;
+}
+
+#brand-card {
+    column-span: 2;
+    row-span: 3;
+    align: center middle;
+}
+
+.layout-compact #brand-card {
+    row-span: 2;
+}
+
+#brand-glyph {
+    color: #ff4fd2;
+    text-style: bold;
+    content-align: center middle;
+    height: 3;
+}
+
+#brand-name {
+    color: #cdd3ff;
+    text-style: bold;
+    content-align: center middle;
+}
+
+#brand-sub {
+    color: #7f87b5;
+    content-align: center middle;
+}
+
+#actions-card {
+    column-span: 3;
+    row-span: 3;
+    layout: vertical;
+}
+
+.layout-compact #actions-card {
+    row-span: 2;
+}
+
+.action-pill {
+    margin-bottom: 1;
+    background: #161a38;
+    border: round #3b4488;
+    color: #d9e7ff;
+    text-style: bold;
+}
+
+#stats-panel {
+    column-span: 4;
+    row-span: 3;
+}
+
+.layout-ultra #stats-panel {
+    row-span: 4;
+}
+
+#stats-body {
+    margin-bottom: 1;
+}
+
+#finance-grid {
+    border: round #3b4488;
+    background: #151a35;
+    padding: 1;
+    margin-bottom: 1;
+    color: #d4dcff;
+}
+
+#targets-panel {
+    column-span: 3;
+    row-span: 3;
+}
+
+.layout-compact #targets-panel {
+    row-span: 4;
+}
+
+#company-form {
+    border: round #3b4488;
+    background: #141a39;
+    padding: 1;
+    color: #d4dcff;
     margin-bottom: 1;
 }
 
 #target-list {
+    border: round #3b4488;
+    background: #0f1430;
     height: 1fr;
-    border: round #2b8a3e;
+}
+
+#results-panel {
+    column-span: 5;
+    row-span: 4;
+}
+
+.layout-compact #results-panel {
+    column-span: 6;
+}
+
+#results-graph {
+    border: round #3b4488;
+    background: #131836;
+    padding: 1;
+    margin-bottom: 1;
+    color: #9ce9ff;
+}
+
+#results-view {
+    height: 1fr;
+    border: round #3b4488;
+    background: #121731;
+}
+
+#tasks-panel {
+    column-span: 4;
+    row-span: 4;
+}
+
+.layout-compact #tasks-panel {
+    column-span: 3;
+}
+
+#team-tabs {
+    border: round #3b4488;
+    background: #141a38;
+    padding: 0 1;
     margin-bottom: 1;
 }
 
-#tool-box {
-    height: 12;
-    border: round #f59f00;
-    padding: 0 1;
+#task-view {
+    height: 1fr;
+    border: round #3b4488;
+    background: #121731;
 }
 
-#sidebar-controls {
-    height: auto;
-    margin-top: 1;
+#instant-card {
+    column-span: 3;
+    row-span: 4;
 }
 
-#sidebar-controls Button {
-    width: 1fr;
-    margin-right: 1;
+.layout-compact #instant-card {
+    row-span: 3;
 }
 
-#main {
-    width: 1fr;
-    padding: 1;
-}
-
-#view-label {
-    color: #74c0fc;
+#instant-title {
+    color: #9de6ff;
     text-style: bold;
     margin-bottom: 1;
 }
 
-#view-stack {
+#instant-body {
+    border: round #3b4488;
+    background: #141a39;
+    padding: 1;
+}
+
+#compare-card {
+    column-span: 4;
+    row-span: 2;
+}
+
+.layout-compact #compare-card {
+    column-span: 3;
+}
+
+#compare-title {
+    color: #9de6ff;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#compare-body {
+    border: round #3b4488;
+    background: #141a39;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+#compare-graph {
+    border: round #3b4488;
+    background: #151a35;
+    padding: 1;
+}
+
+#logs-panel {
+    column-span: 5;
+    row-span: 4;
+}
+
+.layout-compact #logs-panel {
+    column-span: 6;
+}
+
+#log-view {
+    border: round #3b4488;
+    background: #121731;
     height: 1fr;
-    border: round #4dabf7;
-    background: #0d1418;
+    margin-bottom: 1;
 }
 
-#log-view,
-#results-view {
+#quote-blurb {
+    border: round #3b4488;
+    background: #161b3b;
+    color: #f2f4ff;
+    text-style: italic;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+.layout-compact #quote-blurb {
+    display: none;
+}
+
+#export-card {
+    column-span: 3;
+    row-span: 2;
+}
+
+#export-title {
+    color: #9de6ff;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#export-body {
+    border: round #3b4488;
+    background: #141a39;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+#revenue-card {
+    column-span: 3;
+    row-span: 2;
+}
+
+#revenue-title {
+    color: #9de6ff;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#revenue-graph {
+    border: round #3b4488;
+    background: #141a39;
+    padding: 1;
     height: 1fr;
 }
 
-#task-view {
-    height: 11;
-    border: round #fcc419;
-    margin-top: 1;
+.graph-line {
+    margin-bottom: 1;
 }
 
-#scan-progress {
-    height: 3;
-    margin-top: 1;
+.panel-actions {
+    layout: horizontal;
+    height: auto;
+}
+
+.panel-btn {
+    width: 1fr;
+    margin-right: 1;
+    background: #1d2550;
+    border: round #3d4791;
+    color: #d8e8ff;
+    text-style: bold;
+}
+
+.full-btn {
+    width: 1fr;
+}
+
+#command-row {
+    height: auto;
+    margin-bottom: 1;
 }
 
 #command-input {
-    margin-top: 1;
+    width: 1fr;
+    border: round #3d4791;
+    background: #121735;
+    color: #e9ecff;
+}
+
+#hotkey-bar {
+    height: 1;
+    color: #cfd5ff;
+    margin-bottom: 1;
 }
 
 #status-bar {
     height: 1;
-    color: #ffd43b;
-    margin-top: 1;
+    color: #ffd97a;
+}
+
+DataTable {
+    border-title-color: #9de6ff;
+}
+
+#too-small-overlay {
+    display: none;
+    layer: overlay;
+    dock: top;
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    background: #000000 70%;
+}
+
+#too-small-box {
+    width: 64;
+    height: auto;
+    border: round #ff5b9b;
+    background: #1b1026;
+    padding: 1 2;
+}
+
+#too-small-title {
+    color: #ff6cb0;
+    text-style: bold;
+    content-align: center middle;
+    margin-bottom: 1;
+}
+
+#too-small-text {
+    color: #f2d6ff;
+    content-align: center middle;
 }
 
 ModalScreen {
     align: center middle;
-    background: #000000 50%;
+    background: #000000 60%;
 }
 
 .target-modal,
-.config-modal {
-    width: 70;
+.settings-modal {
+    width: 72;
     height: auto;
-    border: thick #74c0fc;
-    background: #111b20;
+    border: round #5f76ff;
+    background: #121733;
     padding: 1 2;
 }
 
 .modal-title {
-    color: #a5d8ff;
+    color: #9de6ff;
     text-style: bold;
     margin-bottom: 1;
+}
+
+.overlay-hint {
+    color: #aeb4de;
+    margin-bottom: 1;
+}
+
+.choice-row {
+    layout: horizontal;
+    margin-bottom: 1;
+}
+
+.settings-option {
+    width: 1fr;
+    margin-right: 1;
+    background: #171c3a;
+    border: round #3d4791;
+}
+
+.settings-option.is-selected {
+    background: #2c2a4f;
+    border: round #61e2ff;
+    color: #f6e96b;
+    text-style: bold;
 }
 
 .modal-actions {
@@ -115,4 +433,26 @@ ModalScreen {
 .modal-actions Button {
     width: 1fr;
     margin-right: 1;
+}
+
+.theme-monokai .card {
+    background: #121735;
+    border: round #3b4488;
+}
+
+.theme-monokai #app-shell {
+    background: #0b0e21;
+}
+
+.theme-dracula .card {
+    background: #171429;
+    border: round #4b4b8f;
+}
+
+.theme-dracula #app-shell {
+    background: #120f22;
+}
+
+.layout-ultra .card {
+    border: round #4652a3;
 }

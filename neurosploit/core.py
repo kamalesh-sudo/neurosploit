@@ -9,12 +9,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-import dns.resolver
-import requests
-import urllib3
+try:
+    import requests
+except ModuleNotFoundError:
+    requests = None
+
+try:
+    import urllib3
+except ModuleNotFoundError:
+    urllib3 = None
+
+try:
+    import dns.resolver as dns_resolver
+except ModuleNotFoundError:
+    dns_resolver = None
+
+from .targets import SUBDOMAIN_LABEL_PATTERN, is_valid_domain, normalize_domain
 
 # Disable SSL warnings for reconnaissance purposes.
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+if urllib3 is not None:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 LogCallback = Callable[[str], Optional[Awaitable[None]]]
@@ -64,7 +78,10 @@ class AsyncNeuroRecon:
         log_callback: Optional[LogCallback] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ):
-        self.domain = domain.strip().lower()
+        normalized_domain = normalize_domain(domain)
+        if not is_valid_domain(normalized_domain):
+            raise ValueError(f"Invalid domain: {domain!r}")
+        self.domain = normalized_domain
         self.config = config or ScanConfig()
         self.log_callback = log_callback
         self.progress_callback = progress_callback
@@ -88,14 +105,21 @@ class AsyncNeuroRecon:
         packaged_path = Path(__file__).resolve().parent / "data" / "subdomains.txt"
         file_words: List[str] = []
         if packaged_path.exists():
-            file_words = [line.strip() for line in packaged_path.read_text().splitlines() if line.strip()]
+            for line in packaged_path.read_text(encoding="utf-8").splitlines():
+                candidate = line.strip().lower()
+                if not candidate or candidate.startswith("#"):
+                    continue
+                if SUBDOMAIN_LABEL_PATTERN.fullmatch(candidate):
+                    file_words.append(candidate)
         deduped = {word.lower() for word in self.DEFAULT_SUBDOMAIN_WORDLIST + file_words}
         return sorted(deduped)
 
     def _dns_bruteforce_blocking(self, subdomain: str) -> Optional[Tuple[str, str]]:
+        if dns_resolver is None:
+            return None
         full_domain = f"{subdomain}.{self.domain}"
         try:
-            resolver = dns.resolver.Resolver()
+            resolver = dns_resolver.Resolver()
             resolver.timeout = self.config.timeout
             resolver.lifetime = self.config.timeout
             answers = resolver.resolve(full_domain, "A")
@@ -109,6 +133,8 @@ class AsyncNeuroRecon:
 
     def _crt_sh_enum_blocking(self) -> Set[Tuple[str, str]]:
         discovered: Set[Tuple[str, str]] = set()
+        if requests is None:
+            return discovered
         url = f"https://crt.sh/?q=%.{self.domain}&output=json"
         headers = {
             "User-Agent": "Mozilla/5.0 (NeuroSploit Async Recon)",
@@ -183,32 +209,34 @@ class AsyncNeuroRecon:
         return tech
 
     def _probe_subdomain_blocking(self, subdomain: str, ip: str) -> Optional[Dict[str, Any]]:
-        session = requests.Session()
-        session.verify = False
-        session.headers.update({"User-Agent": "Mozilla/5.0 (NeuroSploit Async Probe)"})
+        if requests is None:
+            return None
+        with requests.Session() as session:
+            session.verify = False
+            session.headers.update({"User-Agent": "Mozilla/5.0 (NeuroSploit Async Probe)"})
 
-        for protocol in ("https", "http"):
-            try:
-                response = session.get(
-                    f"{protocol}://{subdomain}",
-                    timeout=self.config.timeout,
-                    allow_redirects=True,
-                )
-                headers = dict(response.headers)
-                tech_info = self._detect_technology(headers, response.text)
-                return {
-                    "subdomain": subdomain,
-                    "ip": ip,
-                    "status_code": response.status_code,
-                    "protocol": protocol,
-                    "title": self._extract_title(response.text),
-                    "server": headers.get("Server", "Unknown"),
-                    "technology": tech_info,
-                    "response_time": response.elapsed.total_seconds(),
-                    "content_length": len(response.content),
-                }
-            except Exception:
-                continue
+            for protocol in ("https", "http"):
+                try:
+                    response = session.get(
+                        f"{protocol}://{subdomain}",
+                        timeout=(self.config.timeout, max(2, self.config.timeout * 2)),
+                        allow_redirects=True,
+                    )
+                    headers = dict(response.headers)
+                    tech_info = self._detect_technology(headers, response.text)
+                    return {
+                        "subdomain": subdomain,
+                        "ip": ip,
+                        "status_code": response.status_code,
+                        "protocol": protocol,
+                        "title": self._extract_title(response.text),
+                        "server": headers.get("Server", "Unknown"),
+                        "technology": tech_info,
+                        "response_time": response.elapsed.total_seconds(),
+                        "content_length": len(response.content),
+                    }
+                except Exception:
+                    continue
         return None
 
     async def check_subdomain_alive(self, subdomain_info: Tuple[str, str]) -> Optional[Dict[str, Any]]:
@@ -300,7 +328,11 @@ class AsyncNeuroRecon:
         results: List[Any] = []
 
         for current, task in enumerate(asyncio.as_completed(tasks), start=1):
-            result = await task
+            try:
+                result = await task
+            except Exception as exc:
+                await self._emit_log(f"[{phase}] worker failed: {exc}")
+                result = None
             results.append(result)
             await self._emit_progress(phase, current, total, f"{progress_prefix}: {current}/{total}")
 
@@ -378,17 +410,22 @@ class AsyncNeuroRecon:
             return report
 
         if self.config.enable_ct_logs:
-            await self._emit_log("Step 1/4: Enumerating Certificate Transparency logs")
-            ct_subdomains = await self.crt_sh_enum()
-            self.state.found_subdomains.update(ct_subdomains)
-            await self._emit_progress(
-                "ct_logs",
-                len(ct_subdomains),
-                len(ct_subdomains),
-                f"CT enumeration discovered {len(ct_subdomains)} entries",
-            )
+            if requests is None:
+                await self._emit_log("Step 1/4: Skipping CT logs lookup (requests not installed)")
+            else:
+                await self._emit_log("Step 1/4: Enumerating Certificate Transparency logs")
+                ct_subdomains = await self.crt_sh_enum()
+                self.state.found_subdomains.update(ct_subdomains)
+                await self._emit_progress(
+                    "ct_logs",
+                    len(ct_subdomains),
+                    len(ct_subdomains),
+                    f"CT enumeration discovered {len(ct_subdomains)} entries",
+                )
 
-        if self.config.enable_dns_bruteforce:
+        if self.config.enable_dns_bruteforce and dns_resolver is None:
+            await self._emit_log("Step 2/4: Skipping DNS brute-force (dnspython not installed)")
+        elif self.config.enable_dns_bruteforce:
             await self._emit_log("Step 2/4: Running DNS brute-force")
             wordlist = self.load_subdomain_wordlist()
             dns_results = await self._bounded_run(
@@ -403,15 +440,19 @@ class AsyncNeuroRecon:
         await self._emit_log(f"Discovered {len(self.state.found_subdomains)} candidate subdomains")
 
         if self.config.enable_http_probe:
-            await self._emit_log("Step 3/4: Probing discovered hosts for live HTTP services")
-            probe_results = await self._bounded_run(
-                phase="http_probe",
-                items=sorted(self.state.found_subdomains),
-                worker=self.check_subdomain_alive,
-                concurrency=max(8, min(30, self.config.max_concurrency)),
-                progress_prefix="HTTP probe",
-            )
-            self.state.live_subdomains = [item for item in probe_results if item]
+            if requests is None:
+                await self._emit_log("Step 3/4: Skipping HTTP probing (requests not installed)")
+                self.state.live_subdomains = []
+            else:
+                await self._emit_log("Step 3/4: Probing discovered hosts for live HTTP services")
+                probe_results = await self._bounded_run(
+                    phase="http_probe",
+                    items=sorted(self.state.found_subdomains),
+                    worker=self.check_subdomain_alive,
+                    concurrency=max(8, min(30, self.config.max_concurrency)),
+                    progress_prefix="HTTP probe",
+                )
+                self.state.live_subdomains = [item for item in probe_results if item]
         else:
             self.state.live_subdomains = []
 
@@ -427,6 +468,7 @@ class AsyncNeuroRecon:
                 progress_prefix="Deep analysis",
             )
             self.state.live_subdomains = [item for item in enriched if item]
+            self.state.live_subdomains.sort(key=lambda item: str(item.get("subdomain", "")))
 
         report = {
             "domain": self.domain,
@@ -471,6 +513,10 @@ def run_enhanced_recon(domain: str) -> Dict[str, Any]:
 
 
 def run_mock_recon(domain: str) -> Dict[str, Any]:
+    domain = normalize_domain(domain)
+    if not is_valid_domain(domain):
+        raise ValueError(f"Invalid domain: {domain!r}")
+
     return {
         "domain": domain,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -527,6 +573,17 @@ def run_mock_recon(domain: str) -> Dict[str, Any]:
 
 
 def build_ai_prompt(domain: str, recon_data: Dict[str, Any]) -> str:
+    domain = normalize_domain(domain)
+    if not is_valid_domain(domain):
+        raise ValueError(f"Invalid domain: {domain!r}")
+
+    prompt_file = Path(__file__).resolve().parent / "prompts" / "analysis_prompt.txt"
+    analysis_instructions = (
+        prompt_file.read_text(encoding="utf-8").strip()
+        if prompt_file.exists()
+        else "Analyze the reconnaissance report and identify realistic, ethical security findings."
+    )
+
     live_subs = recon_data.get("live_subdomains", [])
     security_issues = recon_data.get("summary", {}).get("security_issues", [])
     tech_summary = recon_data.get("summary", {}).get("technologies", {})
@@ -548,6 +605,8 @@ def build_ai_prompt(domain: str, recon_data: Dict[str, Any]) -> str:
     tech_text = [f"  - {tech}: {count} instances" for tech, count in tech_summary.items()]
 
     prompt = f"""
+{analysis_instructions}
+
 NEUROSPLOIT RECONNAISSANCE REPORT
 =================================
 
@@ -577,5 +636,5 @@ AI ANALYSIS REQUEST:
 
 def export_report(report: Dict[str, Any], output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2, default=str))
+    output_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     return output_path

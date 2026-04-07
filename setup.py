@@ -13,7 +13,6 @@ setup(
         "requests",
         "dnspython",
         "urllib3",
-        "python-whois",
         "textual>=0.58.0",
         "rich>=13.7.0",
     ],

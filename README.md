@@ -64,6 +64,13 @@ Examples:
 neurosploit --headless example.com --threads 60 --timeout 7 --output results/example.json
 ```
 
+Headless mode now validates and normalizes targets, so inputs like `https://example.com/path` are cleaned to `example.com`.
+
+## Target List Hygiene
+
+- `neurosploit/data/urls.txt` is treated as the default target list for TUI startup.
+- Invalid or duplicate entries are automatically removed when the app loads.
+
 ## Notes
 
 - `nmap` enrichment is optional and requires `nmap` installed on the host.

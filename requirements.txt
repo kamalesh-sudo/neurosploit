@@ -3,5 +3,3 @@ dnspython
 urllib3
 textual>=0.58.0
 rich>=13.7.0
-python-whois
-setuptools
